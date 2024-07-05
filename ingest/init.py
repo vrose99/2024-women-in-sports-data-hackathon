@@ -5,10 +5,6 @@ from sqlalchemy import create_engine
 from tqdm import tqdm
 import warnings
 import argparse
-from matplotlib.patches import Polygon
-from matplotlib.path import Path
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 # Suppress FutureWarnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
