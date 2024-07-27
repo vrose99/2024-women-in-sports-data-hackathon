@@ -40,6 +40,8 @@ def parse_jsonl_to_dfs(file_path):
             pitch_data = json_data['summary_acts']['pitch']
             if pitch_data['eventId']:
                 pitch_data_flat = {
+                    'filepath': file_path,
+                    'gameId': file_path.split('_')[0].split('/')[-1],
                     'pitch_eventId': pitch_data.get('eventId'),
                     'type': json.dumps(pitch_data.get('type', {})),  # Convert to JSON string
                     'result': pitch_data.get('result'),
@@ -55,6 +57,8 @@ def parse_jsonl_to_dfs(file_path):
             hit_data = json_data['summary_acts']['hit']
             if hit_data['eventId'] and any(hit_data['speed'].values()) and hit_data['spin']['rpm'] is not None:
                 hit_data_flat = {
+                    'filepath': file_path,
+                    'gameId': file_path.split('_')[0].split('/')[-1],
                     'hit_eventId': hit_data.get('eventId'),
                     'speed_mph': hit_data['speed'].get('mph'),
                     'speed_kph': hit_data['speed'].get('kph'),
@@ -67,12 +71,15 @@ def parse_jsonl_to_dfs(file_path):
             score_data = json_data['summary_score']
             if score_data:
                 score_data_flat = {
+                    'filepath': file_path,
+                    'gameId': file_path.split('_')[0].split('/')[-1],
                     'pitch_eventId': pitch_data.get('eventId'),
                     'hit_eventId': hit_data.get('eventId'),
                     'runs_game_team1': score_data['runs']['game']['team1'],
                     'runs_game_team2': score_data['runs']['game']['team2'],
                     'runs_innings_team1': json.dumps([inning['team1'] for inning in score_data['runs']['innings']]),
                     'runs_innings_team2': json.dumps([inning['team2'] for inning in score_data['runs']['innings']]),
+                    'play': score_data['runs']['play'],
                     'outs_inning': score_data['outs']['inning'],
                     'outs_play': score_data['outs']['play'],
                     'count_balls_plateAppearance': score_data['count']['balls']['plateAppearance'],
@@ -83,26 +90,31 @@ def parse_jsonl_to_dfs(file_path):
                 score_dfs.append(pd.DataFrame([score_data_flat]))
 
             # Parse events
-            events_data = json_data['events']
+            events_data = json_data.get('events', [])
             for event in events_data:
-                if event['eventId']:
+                if 'start' in event and 'angle' in event['start']:
+                    angle = event['start']['angle']
                     event_flat = {
+                        'filepath': file_path,
+                        'gameId': file_path.split('_')[0].split('/')[-1],
                         'pitch_eventId': pitch_data.get('eventId'),
                         'hit_eventId': hit_data.get('eventId'),
                         'eventId': event.get('eventId'),
                         'type': event.get('type'),
-                        'angle_x': event['start']['angle'][0],
-                        'angle_y': event['start']['angle'][1],
-                        'teamId_mlbId': event['teamId']['mlbId'],
-                        'personId_mlbId': event['personId']['mlbId']
+                        'launch_angle': angle[0] if len(angle) > 0 else None,
+                        'spray_angle': angle[1] if len(angle) > 1 else None,
+                        'teamId_mlbId': event.get('teamId', {}).get('mlbId'),
+                        'personId_mlbId': event.get('personId', {}).get('mlbId')
                     }
                     events_dfs.append(pd.DataFrame([event_flat]))
 
             # Parse ball samples
-            ball_samples_data = json_data['samples_ball']
+            ball_samples_data = json_data.get('samples_ball', [])
             for sample in ball_samples_data:
                 if sample['pos']:
                     sample_flat = {
+                        'filepath': file_path,
+                        'gameId': file_path.split('_')[0].split('/')[-1],
                         'pitch_eventId': pitch_data.get('eventId'),
                         'hit_eventId': hit_data.get('eventId'),
                         'time': sample.get('time'),
@@ -119,10 +131,12 @@ def parse_jsonl_to_dfs(file_path):
                     ball_samples_dfs.append(pd.DataFrame([sample_flat]))
 
             # Parse bat samples
-            bat_samples_data = json_data['samples_bat']
+            bat_samples_data = json_data.get('samples_bat', [])
             for sample in bat_samples_data:
                 if sample.get('head') or sample.get('handle'):
                     sample_flat = {
+                        'filepath': file_path,
+                        'gameId': file_path.split('_')[0].split('/')[-1],
                         'pitch_eventId': pitch_data.get('eventId'),
                         'hit_eventId': hit_data.get('eventId'),
                         'event': sample.get('event'),
@@ -201,6 +215,60 @@ bat_samples_df_all = clean_column_names(bat_samples_df_all)
 for df in [pitch_df_all, hit_df_all, score_df_all, events_df_all, ball_samples_df_all, bat_samples_df_all]:
     for column in df.columns:
         df[column] = df[column].apply(lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x)
+
+# Create lookup dictionaries for pitch and hit events
+pitchId_batter_dict = dict(zip(events_df_all['pitch_eventId'].astype(str), events_df_all['personId_mlbId'].astype(str)))
+pitchId_team_dict = dict(zip(events_df_all['pitch_eventId'].astype(str), events_df_all['teamId_mlbId'].astype(str)))
+hitId_team_dict = dict(zip(events_df_all['hit_eventId'].astype(str), events_df_all['personId_mlbId'].astype(str)))
+
+def try_lookup(dict, value):
+    try:
+        return dict[value]
+    except:
+        return 'NO SWING'
+    
+# Apply lookup dictionaries to score_df
+score_df_all['personId_mlbId'] = score_df_all['pitch_eventId'].apply(lambda x: try_lookup(pitchId_batter_dict, str(x)))
+score_df_all['teamId_mlbId'] = score_df_all['pitch_eventId'].apply(lambda x: try_lookup(pitchId_team_dict, str(x)))
+
+# Assigned positions dictionary
+assigned_positions = {
+    '172804761': 'Catcher',
+    '174158975': 'Pitcher',
+    '223971350': 'Third Base',
+    '290569727': 'Second Base',
+    '352830460': 'Second Base',
+    '360906992': 'First Base',
+    '412098649': 'Catcher',
+    '432216743': 'Right Field',
+    '451871192': 'Catcher',
+    '459722179': 'Designated Hitter',
+    '474808052': 'Left Field',
+    '485007791': 'Pitcher',
+    '505414610': 'Pitcher',
+    '518481551': 'Catcher',
+    '545569723': 'Second Base',
+    '558675411': 'Second Base',
+    '563942271': 'Right Field',
+    '568527038': 'Designated Hitter',
+    '590082479': 'Pitcher',
+    '617522563': 'Right Field',
+    '618024297': 'Second Base',
+    '654287703': 'Right Field',
+    '686425745': 'Left Field',
+    '719146721': 'Second Base',
+    '719210239': 'Center Field',
+    '765710437': 'Designated Hitter',
+    '797796542': 'Third Base',
+    '797957728': 'Pitcher',
+    '805688901': 'First Base',
+    '849653732': 'Left Field',
+    '854238128': 'Shortstop'
+}
+
+# Apply lookup dictionaries and assigned positions to hit_df
+hit_df_all['personId_mlbId'] = hit_df_all['hit_eventId'].apply(lambda x: hitId_team_dict[str(x)])
+hit_df_all['position'] = hit_df_all['personId_mlbId'].apply(lambda x: assigned_positions.get(str(x), 'Unknown'))
 
 # Store DataFrames into SQLite tables
 pitch_df_all.to_sql('pitch_data', engine, if_exists='replace', index=False)
