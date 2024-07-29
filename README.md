@@ -5,6 +5,10 @@
 ## Reproduction overview
 This Shiny app from R can be run simply from R studio after a ingesting the raw data provided by the organizers using python. 
 
+<video width="320" height="240" controls>
+  <source src="https://github.com/vrose99/2024-women-in-sports-data-hackathon/blob/main/WISD_goldeyes_7_28_24.mov" type="video/quicktime">
+</video>
+
 ## Step 0: Environment
 This code was originally ran on MacOS using **Python 3.12** and **RStudio 1.4.1103** with **R 4.0.3**.
 
