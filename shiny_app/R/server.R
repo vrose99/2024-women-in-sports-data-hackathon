@@ -34,6 +34,41 @@ get_batted_ball_outcome <- function(launch_angle) {
   }
 }
 
+id_to_name <- list(
+  `172804761` = "John Smith",
+  `174158975` = "Michael Johnson",
+  `223971350` = "David Brown",
+  `290569727` = "James Williams",
+  `352830460` = "Robert Jones",
+  `360906992` = "William Garcia",
+  `412098649` = "Charles Miller",
+  `432216743` = "Joseph Martinez",
+  `451871192` = "Thomas Davis",
+  `459722179` = "Christopher Rodriguez",
+  `474808052` = "Daniel Hernandez",
+  `485007791` = "Matthew Moore",
+  `505414610` = "Anthony Taylor",
+  `518481551` = "Mark Anderson",
+  `545569723` = "Paul Thomas",
+  `558675411` = "Steven Jackson",
+  `563942271` = "Andrew White",
+  `568527038` = "Joshua Harris",
+  `590082479` = "Kenneth Martin",
+  `617522563` = "Kevin Thompson",
+  `618024297` = "Brian Garcia",
+  `654287703` = "George Martinez",
+  `686425745` = "Edward Robinson",
+  `719146721` = "Ronald Clark",
+  `719210239` = "Timothy Lewis",
+  `765710437` = "Jason Lee",
+  `797796542` = "Jeffrey Walker",
+  `797957728` = "Ryan Hall",
+  `805688901` = "Jacob Allen",
+  `849653732` = "Gary Young",
+  `854238128` = "Nicholas King"
+)
+
+
 # Function to calculate swing data
 get_swing_df <- function(bat_samples_df, pitchEvent_ID) {
   pitchEvent_df <- bat_samples_df %>% filter(pitch_eventId == pitchEvent_ID) %>% arrange(time)
@@ -71,12 +106,19 @@ axis_labels <- c(
 
 # Function to calculate avg_speed and avg_spin for a given personId_mlbId
 calculate_avg_metrics <- function(df, personId) {
-  df %>% 
-    filter(personId_mlbId == personId) %>%
-    summarise(
-      avg_speed = mean(speed_mph, na.rm = TRUE),
-      avg_spin = mean(spin_rpm, na.rm = TRUE)
-    )
+  df <- df %>% filter(personId_mlbId == personId)
+  
+  avg_speed <- mean(df$speed_mph, na.rm = TRUE)
+  avg_spin_rate <- if ("spin_rpm" %in% colnames(df)) mean(df$spin_rpm, na.rm = TRUE) else NA
+  total_hits <- nrow(df)
+  hard_hit_rate <- mean(df$speed_mph > 95, na.rm = TRUE) * 100
+  
+  list(
+    avg_speed = avg_speed,
+    avg_spin_rate = avg_spin_rate,
+    total_hits = total_hits,
+    hard_hit_rate = hard_hit_rate
+  )
 }
 
 server <- function(input, output, session) {
@@ -95,54 +137,19 @@ server <- function(input, output, session) {
   hitId_team_dict <- setNames(as.character(events_df$personId_mlbId), as.character(events_df$hit_eventId))
   hitId_pitchId_dict <- setNames(as.character(events_df$hit_eventId), as.character(events_df$pitch_eventId))
   
-  get_swing_df <- function(bat_samples_df, pitchEvent_ID) {
-    pitchEvent_df <- bat_samples_df %>% filter(pitch_eventId == pitchEvent_ID) %>% arrange(time)
-    if (nrow(pitchEvent_df) == 0) {
-      return(data.frame())
-    }
-    
-    if ('event' %in% colnames(pitchEvent_df)) {
-      start_index <- which(pitchEvent_df$event == 'First')[1]
-      end_index <- which(pitchEvent_df$event == 'Last')[length(which(pitchEvent_df$event == 'Last'))]
-      swing_df <- pitchEvent_df[start_index:end_index, ]
-    } else {
-      swing_df <- pitchEvent_df
-    }
-    
-    swing_df <- swing_df %>%
-      mutate(
-        head_speed = sqrt((head_pos_x - lag(head_pos_x))^2 + (head_pos_y - lag(head_pos_y))^2 + (head_pos_z - lag(head_pos_z))^2) / (time - lag(time)),
-        handle_speed = sqrt((handle_pos_x - lag(handle_pos_x))^2 + (handle_pos_y - lag(handle_pos_y))^2 + (handle_pos_z - lag(handle_pos_z))^2) / (time - lag(time)),
-        head_acceleration = (head_speed - lag(head_speed)) / (time - lag(time)),
-        handle_acceleration = (handle_speed - lag(handle_speed)) / (time - lag(time)),
-        angular_velocity = handle_speed / sqrt(handle_pos_x^2 + handle_pos_y^2)
-      )
-    
-    return(swing_df)
-  }
-  
-  # Apply lookup dictionaries to score_df
-  score_df$personId_mlbId <- sapply(score_df$pitch_eventId, function(x) try_lookup(pitchId_batter_dict, as.character(x)))
-  score_df$teamId_mlbId <- sapply(score_df$pitch_eventId, function(x) try_lookup(pitchId_team_dict, as.character(x)))
-  
-  
-  # Filter player IDs with at least one row in batted_balls
+  # Create a list of valid player IDs
   valid_player_ids <- events_df %>%
     group_by(personId_mlbId) %>%
     filter(n() > 0) %>%
     pull(personId_mlbId) %>%
     unique()
   
-  updateSelectInput(session, "playerId", choices = valid_player_ids, selected = "617522563")
-  updateSelectInput(session, "comparePlayerId", choices = valid_player_ids)
+  # Create a named list of valid player IDs for display purposes
+  named_player_ids <- setNames(as.character(valid_player_ids), sapply(valid_player_ids, function(x) id_to_name[[as.character(x)]]))
   
-  calculate_average_angles <- function(df) {
-    df %>% 
-      summarise(avg_angle_x = mean(launch_angle, na.rm = TRUE),
-                avg_angle_y = mean(spray_angle, na.rm = TRUE))
-  }
-  
-  # Calculate the range for spray angle
+  # Update the selectInput choices with the named list
+  updateSelectInput(session, "playerId", choices = named_player_ids, selected = "617522563")
+  updateSelectInput(session, "comparePlayerId", choices = named_player_ids)
   spray_angle_range <- range(events_df$spray_angle, na.rm = TRUE)
   
   # Update the slider input for time range
@@ -157,33 +164,47 @@ server <- function(input, output, session) {
     req(input$playerId)
     player_team <- unique(score_df %>% filter(personId_mlbId == input$playerId) %>% pull(teamId_mlbId))
     team_color <- ifelse(player_team == 63813, "background-color: #9DE1FE;", ifelse(player_team == 90068, "background-color: #FF939E;", "background-color: white;"))
-    img_src <- paste0("./img/", player_team, ".png")
-    
-    # Calculate average speed and spin for the selected player
+    img_src <- ifelse(player_team == 63813, 
+                      "https://static.wikia.nocookie.net/muppet/images/4/4a/Kermit_baseball_Muppet_All_Stars.jpg/revision/latest/scale-to-width-down/300?cb=20230419140408", 
+                      "https://static.wikia.nocookie.net/muppet/images/a/ab/MuppetSports-Animal-Baseball.jpg/revision/latest/scale-to-width-down/300?cb=20110521195325")
     
     player_metrics <- calculate_avg_metrics(hit_df, input$playerId)
     wellPanel(style = team_color,
               fluidRow(
                 column(2, 
                        tags$div(
-                         tags$img(src = img_src, style = "height: 165pt; object-fit: cover; display: block; margin-left: auto; margin-right: auto;"), 
-                         tags$h4(textOutput("playerIdDisplay"), style = "text-align: center;")
+                         #tags$img(src = img_src, style = "height: 165pt; object-fit: cover; display: block; margin-left: auto; margin-right: auto;"), 
+                         uiOutput("playerIdDisplay")
                        )
                 ),
-                column(4,
-                       tags$h4("Player Position: ", textOutput("playerPosition")),
-                       tags$h4("Number of Hits: ", textOutput("numberOfHits")),
-                       tags$h4("Team ID: ", player_team),
-                       tags$h4("Average Speed (mph): ", player_metrics$avg_speed),
-                       tags$h4("Average Spin (rpm): ", player_metrics$avg_spin)
-                )
+                column(3,
+                       h4("Average Speed (mph):", round(player_metrics$avg_speed, 2)),
+                       h4("Average Spin Rate:", ifelse(is.na(player_metrics$avg_spin_rate), "N/A", round(player_metrics$avg_spin_rate, 2))),
+                ),
+                column(3,
+                       h4("Hard Hit Rate:", round(player_metrics$hard_hit_rate, 2), "%"),
+                       h4("Total Hits:", player_metrics$total_hits)
+      
+                ),
+                column(3,
+                       h4("Team ID:", player_team)
+                ),
               )
     )
   })
   
-  output$playerIdDisplay <- renderText({
+  output$playerIdDisplay <- renderUI({
     req(input$playerId)
-    input$playerId
+    
+    player_id <- input$playerId
+    HTML(
+      paste0(
+        '<div style="text-align: center;">',
+        '<span style="font-size: 18pt;">', id_to_name[[as.character(input$playerId)]], '</span><br>',
+        '<span style="font-size: 12pt;">', player_id, '</span>',
+        '</div>'
+      )
+    )
   })
   
   output$playerPosition <- renderText({
@@ -317,16 +338,29 @@ server <- function(input, output, session) {
       left_join(avg_angular_velocity, by = "personId_mlbId") %>%
       group_by(personId_mlbId) %>%
       summarise(
-        avg_angular_velocity = mean(avg_angular_velocity, na.rm = TRUE),
+        avg_angular_velocity = round(mean(avg_angular_velocity, na.rm = TRUE), 3),
         num_hits = n(),
-        avg_launch_angle = mean(launch_angle, na.rm = TRUE),
-        avg_spray_angle = mean(spray_angle, na.rm = TRUE),
-        avg_speed = mean(hit_df$speed_mph[hit_df$personId_mlbId == personId_mlbId], na.rm = TRUE),
-        avg_spin = mean(hit_df$spin_rpm[hit_df$personId_mlbId == personId_mlbId], na.rm = TRUE)
+        avg_launch_angle = round(mean(launch_angle, na.rm = TRUE), 3),
+        avg_spray_angle = round(mean(spray_angle, na.rm = TRUE), 3),
+        avg_speed = round(mean(hit_df$speed_mph[hit_df$personId_mlbId == personId_mlbId], na.rm = TRUE), 3),
+        hard_hit_rate = round(mean(hit_df$speed_mph[hit_df$personId_mlbId == personId_mlbId] > 95, na.rm = TRUE) * 100, 3)
+      ) %>%
+      mutate(
+        Player_Name = sapply(personId_mlbId, function(id) id_to_name[[as.character(id)]]),
+        Player_ID = personId_mlbId
       )
+    
+    # Reorder columns using dplyr::select
+    stats_df <- stats_df %>%
+      dplyr::select(Player_Name, Player_ID, avg_angular_velocity, num_hits, avg_launch_angle, avg_spray_angle, avg_speed, hard_hit_rate)
+    
+    # Update column names
+    colnames(stats_df) <- c("Player Name", "Player ID", "Avg Angular Velocity", "Num Hits", "Avg Launch Angle", "Avg Spray Angle", "Avg Speed", "Hard Hit Rate (%)")
     
     datatable(stats_df)
   })
+  
+  
   
   output$normalCurvePlots <- renderPlotly({
     req(input$playerId, input$pitch_eventId)
@@ -395,8 +429,10 @@ server <- function(input, output, session) {
                 mode = 'lines', 
                 line = list(color = 'red', dash = 'dash'), 
                 name = 'Average Angular Velocity') %>%
-      layout(xaxis = list(title = "Angular Velocity"), 
-             yaxis = list(title = "Density"))
+      layout(xaxis = list(title = "Angular Velocity", 
+                          range = range(player_density$x)), 
+             yaxis = list(title = "Density", 
+                          range = c(0, max(player_density$y))))
     
     if (!is.null(team_density)) {
       plot <- plot %>%
